@@ -23,6 +23,8 @@ using System.Text;
 using EnvDTE;
 using log4net;
 
+
+
 namespace VisualStudioComparisonTools
 {
     public class ComparisonWorkerProcess
