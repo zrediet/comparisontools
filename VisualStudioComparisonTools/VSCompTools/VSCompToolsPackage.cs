@@ -6,6 +6,7 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.ComponentModel.Design;
+using System.Threading;
 using System.Windows.Forms;
 using EnvDTE;
 using log4net;
@@ -16,6 +17,10 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 using VisualStudioComparisonTools;
+using Task = System.Threading.Tasks.Task;
+
+using CONNECTDATA = System.Runtime.InteropServices.CONNECTDATA;
+using Microsoft;
 
 [assembly: XmlConfigurator(ConfigFileExtension = "log4net", Watch = true)]
 
@@ -33,14 +38,15 @@ namespace VSCompTools
     /// </summary>
     // This attribute tells the PkgDef creation utility (CreatePkgDef.exe) that this class is
     // a package.
-    [PackageRegistration(UseManagedResourcesOnly = true)]
     // This attribute is used to register the informations needed to show the this package
     // in the Help/About dialog of Visual Studio.
+    [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
     [InstalledProductRegistration(false, "#110", "#112", "1.0", IconResourceID = 400)]
     // This attribute is needed to let the shell know that this package exposes some menus.
-    [ProvideMenuResource("Menus.ctmenu", 1)]
     [Guid(GuidList.guidVSCompToolsPkgString)]
-    public sealed class VSCompToolsPackage : Package
+    [ProvideMenuResource("Menus.ctmenu", 1)]
+    [Obsolete]
+    public sealed class VSCompToolsPackage : AsyncPackage
     {
         private static readonly ILog log = LogManager.GetLogger(MethodBase.GetCurrentMethod().DeclaringType);
 
@@ -89,15 +95,20 @@ namespace VSCompTools
         /// Initialization of the package; this method is called right after the package is sited, so this is the place
         /// where you can put all the initialization code that rely on services provided by VisualStudio.
         /// </summary>
-        protected override void Initialize()
+        /// <param name="cancellationToken">A cancellation token to monitor for initialization cancellation, which can occur when VS is shutting down.</param>
+        /// <param name="progress">A provider for progress updates.</param>
+        /// <returns>A task representing the async work of package initialization, or an already completed task if there is none. Do not return null from this method.</returns>
+        protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
+            
             var log4netconfig = config.ConfigPath + Path.DirectorySeparatorChar + "VisualStudioComparisonTools.dll.log4net";
+            await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
             if (!File.Exists(log4netconfig))
             {
                 InitializeLog4NetLogFile(log4netconfig);
             }
-            
+
             if (File.Exists(log4netconfig))
             {
                 var configFile = new FileInfo(log4netconfig);
@@ -107,12 +118,12 @@ namespace VSCompTools
             {
                 XmlConfigurator.Configure();
             }
-            
-            Debug.WriteLine (string.Format(CultureInfo.CurrentCulture, "Entering Initialize() of: {0}", this.ToString()));
+
+            Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Entering Initialize() of: {0}", this.ToString()));
             base.Initialize();
 
             DTE _applicationObject = GetService(typeof(SDTE)) as DTE;
-
+            Assumes.Present(_applicationObject);
             try
             {
                 log.Debug("Loading config");
@@ -125,14 +136,14 @@ namespace VSCompTools
 
             // Add our command handlers for menu (commands must exist in the .vsct file)
             OleMenuCommandService mcs = GetService(typeof(IMenuCommandService)) as OleMenuCommandService;
-            if ( null != mcs )
+            if (null != mcs)
             {
                 // Create the command for the menu item.
                 var menuCommandID = new CommandID(GuidList.guidVSCompToolsCmdSet, (int)PkgCmdIDList.cmdidCompareSelected);
                 //var menuItem = new MenuCommand(MenuItemCallback, menuCommandID);
                 var menuItem = new OleMenuCommand(MenuItemCallback, menuCommandID);
                 menuItem.BeforeQueryStatus += menuItem_BeforeQueryStatus;
-                mcs.AddCommand( menuItem );
+                mcs.AddCommand(menuItem);
 
                 var menuCommandIDFolder = new CommandID(GuidList.guidVSCompToolsCmdSet, (int)PkgCmdIDList.cmdidCompareSelectedFolder);
                 //var menuItem = new MenuCommand(MenuItemCallback, menuCommandID);
@@ -152,8 +163,11 @@ namespace VSCompTools
                 menuItemMultiProj.BeforeQueryStatus += menuItem_BeforeQueryStatus;
                 mcs.AddCommand(menuItemMultiProj);
             }
+            
+            
         }
         #endregion
+
 
 
         void menuItem_BeforeQueryStatus(object sender, EventArgs e)
@@ -161,17 +175,17 @@ namespace VSCompTools
             var myCommand = sender as OleMenuCommand;
             if (myCommand != null)
             {
-                //DTE dte = GetService(typeof(SDTE)) as DTE;
+                DTE dte = GetService(typeof(SDTE)) as DTE;
 
-                ////One file -> Compare with clipboard
-                //myCommand.Text = "Compare with clipboard";
-                ////One folder -> Hidden
-                ////myCommand.Text = "New Text";
-                ////Two files -> Compare files
-                //myCommand.Text = "Compare files";
-                ////Two folders -> Compare folders
-                //myCommand.Text = "Compare folders";
-                
+                //One file -> Compare with clipboard
+                myCommand.Text = "Compare with clipboard";
+                //One folder -> Hidden
+                //myCommand.Text = "New Text";
+                //Two files -> Compare files
+                myCommand.Text = "Compare files";
+                //Two folders -> Compare folders
+                myCommand.Text = "Compare folders";
+
             }
         }
 
@@ -188,7 +202,7 @@ namespace VSCompTools
             //IVsUIShell uiShell = (IVsUIShell)GetService(typeof(SVsUIShell));
             //EnvDTE.
             //(UIHierarchy)uiShell.Windows.Item(EnvDTE.Constants.vsWindowKindSolutionExplorer).Object;
-            
+
             //Guid clsid = Guid.Empty;
             //int result;
             //Microsoft.VisualStudio.ErrorHandler.ThrowOnFailure(uiShell.ShowMessageBox(
@@ -253,7 +267,7 @@ namespace VSCompTools
                 {
                     var myCommand = sender as OleMenuCommand;
                     if (myCommand != null && myCommand.CommandID.Guid == GuidList.guidVSCompToolsCmdSet &&
-                        myCommand.CommandID.ID == (int) PkgCmdIDList.cmdidCompareSelectedEditor)
+                        myCommand.CommandID.ID == (int)PkgCmdIDList.cmdidCompareSelectedEditor)
                     {
                         workerProcess.TextSelection = GetActiveTextSelection(_applicationObject);
                         workerProcess.ComparisonFilePath1 = GetActiveDocumentFilePath(_applicationObject);
@@ -286,7 +300,7 @@ namespace VSCompTools
                     {
                         throw new Exception("Either one of selected items don't exist for some reason!");
                     }
-        }
+                }
 
                 log.Debug("Starting comparison process");
 
